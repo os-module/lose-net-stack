@@ -13,7 +13,7 @@ use crate::consts::{IpProtocal, IP_HEADER_VHL};
 use crate::net::{Arp, Eth, Ip, IP_LEN, TCP, TCP_LEN, UDP};
 use crate::net_trait::NetInterface;
 use crate::packets::arp::{ArpPacket, ArpType};
-use crate::utils::UnsafeRefIter;
+use crate::utils::BufIter;
 use crate::{MacAddress, TcpFlags};
 
 use self::tcp::TcpServer;
@@ -57,9 +57,9 @@ impl<T: NetInterface + 'static> NetServer<T> {
         self.local_ip
     }
     /// analysis net code.
-    pub fn analysis_net_data(&self, data: &[u8]) {
-        let mut data_ptr_iter = UnsafeRefIter::new(data);
-        let eth_header = unsafe { data_ptr_iter.next::<Eth>() }.unwrap();
+    pub fn analysis_net_data(&self, data: &mut [u8]) {
+        let mut data_ptr_iter = BufIter::new(data);
+        let eth_header = data_ptr_iter.next::<Eth>().unwrap();
         match eth_header.rtype {
             crate::consts::EthRtype::IP => self.analysis_ip(data_ptr_iter, eth_header),
             crate::consts::EthRtype::ARP => self.analysis_arp(data_ptr_iter),
@@ -121,10 +121,9 @@ impl<T: NetInterface + 'static> NetServer<T> {
 }
 
 impl<T: NetInterface + 'static> NetServer<T> {
-    fn analysis_udp(&self, mut data_ptr_iter: UnsafeRefIter, ip_header: &Ip) {
-        let udp_header = unsafe { data_ptr_iter.next::<UDP>() }.unwrap();
-        let data = unsafe { data_ptr_iter.get_curr_arr() };
-
+    fn analysis_udp<'a>(&self, mut data_ptr_iter: BufIter<'a>, ip_header: &Ip) {
+        let udp_header = data_ptr_iter.next::<UDP>().unwrap();
+        let data = data_ptr_iter.get_curr_arr();
         debug!(
             "receive a udp packet: {:?} from {:?}:{}",
             data,
@@ -140,10 +139,10 @@ impl<T: NetInterface + 'static> NetServer<T> {
         }
     }
 
-    fn analysis_tcp(&self, mut data_ptr_iter: UnsafeRefIter, ip_header: &Ip) {
-        let tcp_header = unsafe { data_ptr_iter.next::<TCP>() }.unwrap();
+    fn analysis_tcp<'a>(&self, mut data_ptr_iter: BufIter<'a>, ip_header: &Ip) {
+        let tcp_header = data_ptr_iter.next::<TCP>().unwrap();
         let offset = ((tcp_header.offset >> 4 & 0xf) as usize - 5) * 4;
-        let data = &unsafe { data_ptr_iter.get_curr_arr() }[offset..];
+        let data = &data_ptr_iter.get_curr_arr()[offset..];
         let data_len = ip_header.len.to_be() as usize - TCP_LEN - IP_LEN - offset;
 
         debug!(
@@ -176,14 +175,14 @@ impl<T: NetInterface + 'static> NetServer<T> {
         );
     }
 
-    fn analysis_icmp(&self, data_ptr_iter: UnsafeRefIter, _ip_header: &Ip, _eth_header: &Eth) {
-        let _data = unsafe { data_ptr_iter.get_curr_arr() };
+    fn analysis_icmp<'a>(&self, data_ptr_iter: BufIter<'a>, _ip_header: &Ip, _eth_header: &Eth) {
+        let _data = data_ptr_iter.get_curr_arr();
 
         // Packet::ICMP();
     }
 
-    fn analysis_ip(&self, mut data_ptr_iter: UnsafeRefIter, eth_header: &Eth) {
-        let ip_header = unsafe { data_ptr_iter.next::<Ip>() }.unwrap();
+    fn analysis_ip<'a>(&self, mut data_ptr_iter: BufIter<'a>, eth_header: &Eth) {
+        let ip_header = data_ptr_iter.next::<Ip>().unwrap();
 
         // judge whether the ip header is self
         if ip_header.vhl != IP_HEADER_VHL || ip_header.dst != self.local_ip {
@@ -204,8 +203,8 @@ impl<T: NetInterface + 'static> NetServer<T> {
         };
     }
 
-    fn analysis_arp(&self, mut data_ptr_iter: UnsafeRefIter) {
-        let arp_header = unsafe { data_ptr_iter.next::<Arp>() }.unwrap();
+    fn analysis_arp(&self, mut data_ptr_iter: BufIter) {
+        let arp_header = data_ptr_iter.next::<Arp>().unwrap();
         if arp_header.hlen != 6 || arp_header.plen != 4 {
             // Unsupported now
             log::warn!("can't support the case that not ipv4")

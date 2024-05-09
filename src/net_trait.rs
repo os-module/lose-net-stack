@@ -4,12 +4,12 @@ use alloc::{sync::Arc, vec::Vec};
 
 use crate::{connection::SocketType, results::NetServerError, MacAddress};
 
-pub trait NetInterface: Debug {
+pub trait NetInterface: Debug + Send + Sync {
     fn send(data: &[u8]);
     fn local_mac_address() -> MacAddress;
 }
 
-pub trait SocketInterface {
+pub trait SocketInterface: Send + Sync {
     fn sendto(&self, _data: &[u8], _remote: Option<SocketAddrV4>) -> Result<usize, NetServerError> {
         Err(NetServerError::Unsupported)
     }

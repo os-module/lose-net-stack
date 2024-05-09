@@ -11,7 +11,7 @@ use crate::consts::{EthRtype, IpProtocal, BROADCAST_MAC, IP_HEADER_VHL};
 use crate::net::{Eth, Ip, ETH_LEN, IP_LEN, TCP, TCP_LEN};
 use crate::net_trait::{NetInterface, SocketInterface};
 use crate::results::NetServerError;
-use crate::utils::{check_sum, UnsafeRefIter};
+use crate::utils::{check_sum, BufIter};
 use crate::TcpFlags;
 
 use super::{NetServer, SocketType};
@@ -59,15 +59,23 @@ impl<T: NetInterface> TcpServer<T> {
 }
 
 impl<T: NetInterface + 'static> SocketInterface for TcpServer<T> {
-    fn accept(&self) -> Result<Arc<dyn SocketInterface>, NetServerError> {
-        if let Some(conn) = self.wait_queue.lock().pop_front() {
-            self.clients.lock().push(conn.clone());
-            if !self.get_local().unwrap().ip().is_private() {
-                conn.syn_ack();
-            }
-            Ok(conn)
+    fn sendto(&self, data: &[u8], remote: Option<SocketAddrV4>) -> Result<usize, NetServerError> {
+        let is_client = self.is_client.read().clone();
+
+        if is_client {
+            self.clients.lock()[0].sendto(data, remote)
         } else {
-            Err(NetServerError::EmptyClient)
+            Err(NetServerError::Unsupported)
+        }
+    }
+
+    fn recv_from(&self) -> Result<(Vec<u8>, SocketAddrV4), NetServerError> {
+        let is_client = self.is_client.read().clone();
+
+        if is_client {
+            self.clients.lock()[0].recv_from()
+        } else {
+            Err(NetServerError::Unsupported)
         }
     }
 
@@ -86,6 +94,13 @@ impl<T: NetInterface + 'static> SocketInterface for TcpServer<T> {
         net_server.remote_tcp(&old_local.port());
         net_server.tcp_map.lock().insert(local.port(), self.clone());
         *old_local = local;
+        Ok(())
+    }
+
+    fn listen(self: Arc<Self>) -> Result<(), NetServerError> {
+        if self.get_local().unwrap().port() == 0 {
+            self.clone().bind(self.get_local().unwrap())?;
+        }
         Ok(())
     }
 
@@ -119,6 +134,28 @@ impl<T: NetInterface + 'static> SocketInterface for TcpServer<T> {
         Ok(())
     }
 
+    fn accept(&self) -> Result<Arc<dyn SocketInterface>, NetServerError> {
+        if let Some(conn) = self.wait_queue.lock().pop_front() {
+            self.clients.lock().push(conn.clone());
+            if !self.get_local().unwrap().ip().is_private() {
+                conn.syn_ack();
+            }
+            Ok(conn)
+        } else {
+            Err(NetServerError::EmptyClient)
+        }
+    }
+
+    fn readable(&self) -> Result<bool, NetServerError> {
+        let is_client = self.is_client.read().clone();
+
+        if is_client {
+            self.clients.lock()[0].readable()
+        } else {
+            Ok(self.wait_queue.lock().len() > 0)
+        }
+    }
+
     fn get_local(&self) -> Result<SocketAddrV4, NetServerError> {
         Ok(self.local.read().clone())
     }
@@ -127,38 +164,11 @@ impl<T: NetInterface + 'static> SocketInterface for TcpServer<T> {
         Ok(SocketType::TCP)
     }
 
-    fn listen(self: Arc<Self>) -> Result<(), NetServerError> {
-        if self.get_local().unwrap().port() == 0 {
-            self.clone().bind(self.get_local().unwrap())?;
-        }
-        Ok(())
-    }
-
-    fn recv_from(&self) -> Result<(Vec<u8>, SocketAddrV4), NetServerError> {
+    fn get_remote(&self) -> Result<SocketAddrV4, NetServerError> {
         let is_client = self.is_client.read().clone();
 
         if is_client {
-            self.clients.lock()[0].recv_from()
-        } else {
-            Err(NetServerError::Unsupported)
-        }
-    }
-
-    fn sendto(&self, data: &[u8], remote: Option<SocketAddrV4>) -> Result<usize, NetServerError> {
-        let is_client = self.is_client.read().clone();
-
-        if is_client {
-            self.clients.lock()[0].sendto(data, remote)
-        } else {
-            Err(NetServerError::Unsupported)
-        }
-    }
-
-    fn close(&self) -> Result<(), NetServerError> {
-        let is_client = self.is_client.read().clone();
-
-        if is_client {
-            self.clients.lock()[0].close()
+            self.clients.lock()[0].get_remote()
         } else {
             Err(NetServerError::Unsupported)
         }
@@ -174,21 +184,11 @@ impl<T: NetInterface + 'static> SocketInterface for TcpServer<T> {
         }
     }
 
-    fn readable(&self) -> Result<bool, NetServerError> {
+    fn close(&self) -> Result<(), NetServerError> {
         let is_client = self.is_client.read().clone();
 
         if is_client {
-            self.clients.lock()[0].readable()
-        } else {
-            Ok(self.wait_queue.lock().len() > 0)
-        }
-    }
-
-    fn get_remote(&self) -> Result<SocketAddrV4, NetServerError> {
-        let is_client = self.is_client.read().clone();
-
-        if is_client {
-            self.clients.lock()[0].get_remote()
+            self.clients.lock()[0].close()
         } else {
             Err(NetServerError::Unsupported)
         }
@@ -249,18 +249,19 @@ impl<T: NetInterface + 'static> TcpConnection<T> {
                     .find(|x| *x.remote.read() == self.get_local().unwrap())
                     .map(|x| x.add_data(buf));
             }
+            warn!("send a tcp message to local address, ignore it.");
             return;
         }
 
         let mut options = self.options.lock();
 
-        let data = vec![0u8; TCP_LEN + IP_LEN + ETH_LEN + buf.len()];
+        let mut data = vec![0u8; TCP_LEN + IP_LEN + ETH_LEN + buf.len()];
         // convert data ptr to the ref needed.
-        let mut data_ptr_iter = UnsafeRefIter::new(&data);
-        let eth_header = unsafe { data_ptr_iter.next_mut::<Eth>() }.unwrap();
-        let ip_header = unsafe { data_ptr_iter.next_mut::<Ip>() }.unwrap();
-        let tcp_header = unsafe { data_ptr_iter.next_mut::<TCP>() }.unwrap();
-        let tcp_data = unsafe { data_ptr_iter.get_curr_arr_mut() };
+        let mut data_ptr_iter = BufIter::new(&mut data);
+        let eth_header = data_ptr_iter.next_mut::<Eth>().unwrap();
+        let ip_header = data_ptr_iter.next_mut::<Ip>().unwrap();
+        let tcp_header = data_ptr_iter.next_mut::<TCP>().unwrap();
+        let tcp_data = data_ptr_iter.get_curr_arr_mut();
         eth_header.rtype = EthRtype::IP;
         eth_header.shost = T::local_mac_address();
         eth_header.dhost = get_mac_address(&remote.ip()).unwrap_or(BROADCAST_MAC);
@@ -398,6 +399,26 @@ impl<T: NetInterface + 'static> TcpConnection<T> {
 }
 
 impl<T: NetInterface + 'static> SocketInterface for TcpConnection<T> {
+    /// this function will be called when just need to sendc some data to the remote.
+    fn sendto(&self, data: &[u8], _remote: Option<SocketAddrV4>) -> Result<usize, NetServerError> {
+        debug!(
+            "send a tcp message({} bytes) from {:?} to {:?}",
+            data.len(),
+            self.get_local()?,
+            self.remote.read()
+        );
+        self.send_data(data, TcpFlags::A | TcpFlags::P);
+        Ok(data.len())
+    }
+
+    fn recv_from(&self) -> Result<(Vec<u8>, SocketAddrV4), NetServerError> {
+        self.datas
+            .lock()
+            .pop_front()
+            .map(|x| (x, self.remote.read().clone()))
+            .ok_or(NetServerError::EmptyData)
+    }
+
     /// this function will be called when need to connect to the remote endpoint.
     fn connect(self: Arc<Self>, remote: SocketAddrV4) -> Result<(), NetServerError> {
         *self.remote.write() = remote;
@@ -426,12 +447,16 @@ impl<T: NetInterface + 'static> SocketInterface for TcpConnection<T> {
                 let remote_client = remote_tcp.add_queue(self.get_local().unwrap(), 0).unwrap();
                 *remote_client.status.write() = TcpStatus::WaitingForData;
             } else {
-                return Err(NetServerError::Blocking)
+                return Err(NetServerError::Blocking);
             }
         } else {
             self.send_data(&[], TcpFlags::S);
         }
         Ok(())
+    }
+
+    fn readable(&self) -> Result<bool, NetServerError> {
+        Ok(self.datas.lock().len() > 0)
     }
 
     fn get_local(&self) -> Result<SocketAddrV4, NetServerError> {
@@ -442,24 +467,13 @@ impl<T: NetInterface + 'static> SocketInterface for TcpConnection<T> {
         Ok(SocketType::TCP)
     }
 
-    fn recv_from(&self) -> Result<(Vec<u8>, SocketAddrV4), NetServerError> {
-        self.datas
-            .lock()
-            .pop_front()
-            .map(|x| (x, self.remote.read().clone()))
-            .ok_or(NetServerError::EmptyData)
+    fn get_remote(&self) -> Result<SocketAddrV4, NetServerError> {
+        Ok(self.remote.read().clone())
     }
 
-    /// this function will be called when just need to sendc some data to the remote.
-    fn sendto(&self, data: &[u8], _remote: Option<SocketAddrV4>) -> Result<usize, NetServerError> {
-        debug!(
-            "send a tcp message({} bytes) from {:?} to {:?}",
-            data.len(),
-            self.get_local()?,
-            self.remote.read()
-        );
-        self.send_data(data, TcpFlags::A | TcpFlags::P);
-        Ok(data.len())
+    /// return the socket status. judge whether the socket is closed.
+    fn is_closed(&self) -> Result<bool, NetServerError> {
+        Ok(*self.status.read() == TcpStatus::Closed && *self.remote_closed.read() == true)
     }
 
     /// this function is called when need to close the socket.
@@ -492,18 +506,5 @@ impl<T: NetInterface + 'static> SocketInterface for TcpConnection<T> {
         }
         self.send_data(&[], TcpFlags::F | TcpFlags::A);
         Ok(())
-    }
-
-    /// return the socket status. judge whether the socket is closed.
-    fn is_closed(&self) -> Result<bool, NetServerError> {
-        Ok(*self.status.read() == TcpStatus::Closed && *self.remote_closed.read() == true)
-    }
-
-    fn readable(&self) -> Result<bool, NetServerError> {
-        Ok(self.datas.lock().len() > 0)
-    }
-
-    fn get_remote(&self) -> Result<SocketAddrV4, NetServerError> {
-        Ok(self.remote.read().clone())
     }
 }

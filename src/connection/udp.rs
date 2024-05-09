@@ -13,7 +13,7 @@ use crate::{
     net::{Eth, Ip, ETH_LEN, IP_LEN, UDP, UDP_LEN},
     net_trait::{NetInterface, SocketInterface},
     results::NetServerError,
-    utils::{check_sum, UnsafeRefIter},
+    utils::{check_sum, BufIter},
     MacAddress,
 };
 
@@ -53,24 +53,6 @@ impl<T: NetInterface> UdpServer<T> {
 }
 
 impl<T: NetInterface + 'static> SocketInterface for UdpServer<T> {
-    fn connect(self: Arc<Self>, remote: SocketAddrV4) -> Result<(), NetServerError> {
-        self.inner.lock().remote = Some(remote);
-        if self.get_local()?.port() == 0 {
-            self.clone().bind(self.get_local()?)?;
-        }
-        Ok(())
-    }
-
-    fn recv_from(&self) -> Result<(Vec<u8>, SocketAddrV4), NetServerError> {
-        let mut inner = self.inner.lock();
-        debug!(
-            "try to recv from local address {:?} buffer len: {}",
-            inner.local,
-            inner.packets.len()
-        );
-        inner.packets.pop_front().ok_or(NetServerError::EmptyData)
-    }
-
     fn sendto(&self, buf: &[u8], remote: Option<SocketAddrV4>) -> Result<usize, NetServerError> {
         let inner = self.inner.lock();
         let addr = remote.or(inner.remote);
@@ -86,17 +68,18 @@ impl<T: NetInterface + 'static> SocketInterface for UdpServer<T> {
             if let Some(server) = self.server.upgrade() {
                 server.get_udp(&port).map(|x| x.add_queue(inner.local, buf));
             }
+            warn!("send a udp message to local address, ignore it.");
             return Ok(buf.len());
         }
 
-        let data = vec![0u8; UDP_LEN + IP_LEN + ETH_LEN + buf.len()];
+        let mut data = vec![0u8; UDP_LEN + IP_LEN + ETH_LEN + buf.len()];
 
         // convert data ptr to the ref needed.
-        let mut data_ptr_iter = UnsafeRefIter::new(&data);
-        let eth_header = unsafe { data_ptr_iter.next_mut::<Eth>() }.unwrap();
-        let ip_header = unsafe { data_ptr_iter.next_mut::<Ip>() }.unwrap();
-        let udp_header = unsafe { data_ptr_iter.next_mut::<UDP>() }.unwrap();
-        let udp_data = unsafe { data_ptr_iter.get_curr_arr_mut() };
+        let mut data_ptr_iter = BufIter::new(&mut data);
+        let eth_header = data_ptr_iter.next_mut::<Eth>().unwrap();
+        let ip_header = data_ptr_iter.next_mut::<Ip>().unwrap();
+        let udp_header = data_ptr_iter.next_mut::<UDP>().unwrap();
+        let udp_data = data_ptr_iter.get_curr_arr_mut();
 
         eth_header.rtype = EthRtype::IP.into();
         eth_header.shost = MacAddress::new([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
@@ -127,12 +110,14 @@ impl<T: NetInterface + 'static> SocketInterface for UdpServer<T> {
         Ok(buf.len())
     }
 
-    fn get_local(&self) -> Result<SocketAddrV4, NetServerError> {
-        Ok(self.inner.lock().local)
-    }
-
-    fn get_protocol(&self) -> Result<SocketType, NetServerError> {
-        Ok(SocketType::UDP)
+    fn recv_from(&self) -> Result<(Vec<u8>, SocketAddrV4), NetServerError> {
+        let mut inner = self.inner.lock();
+        debug!(
+            "try to recv from local address {:?} buffer len: {}",
+            inner.local,
+            inner.packets.len()
+        );
+        inner.packets.pop_front().ok_or(NetServerError::EmptyData)
     }
 
     fn bind(self: Arc<Self>, mut local: SocketAddrV4) -> Result<(), NetServerError> {
@@ -161,6 +146,34 @@ impl<T: NetInterface + 'static> SocketInterface for UdpServer<T> {
         }
     }
 
+    fn connect(self: Arc<Self>, remote: SocketAddrV4) -> Result<(), NetServerError> {
+        self.inner.lock().remote = Some(remote);
+        if self.get_local()?.port() == 0 {
+            self.clone().bind(self.get_local()?)?;
+        }
+        Ok(())
+    }
+
+    fn readable(&self) -> Result<bool, NetServerError> {
+        Ok(self.inner.lock().packets.len() > 0)
+    }
+
+    fn get_local(&self) -> Result<SocketAddrV4, NetServerError> {
+        Ok(self.inner.lock().local)
+    }
+
+    fn get_protocol(&self) -> Result<SocketType, NetServerError> {
+        Ok(SocketType::UDP)
+    }
+
+    fn get_remote(&self) -> Result<SocketAddrV4, NetServerError> {
+        self.inner.lock().remote.ok_or(NetServerError::Unsupported)
+    }
+
+    fn is_closed(&self) -> Result<bool, NetServerError> {
+        Ok(false)
+    }
+
     fn close(&self) -> Result<(), NetServerError> {
         match self.server.upgrade() {
             Some(net_server) => {
@@ -173,17 +186,5 @@ impl<T: NetInterface + 'static> SocketInterface for UdpServer<T> {
             }
             None => Ok(()),
         }
-    }
-
-    fn is_closed(&self) -> Result<bool, NetServerError> {
-        Ok(false)
-    }
-
-    fn readable(&self) -> Result<bool, NetServerError> {
-        Ok(self.inner.lock().packets.len() > 0)
-    }
-
-    fn get_remote(&self) -> Result<SocketAddrV4, NetServerError> {
-        self.inner.lock().remote.ok_or(NetServerError::Unsupported)
     }
 }

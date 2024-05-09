@@ -1,3 +1,4 @@
+use core::fmt::{Debug, Formatter};
 use core::{mem::size_of, net::Ipv4Addr};
 
 use crate::{
@@ -45,12 +46,23 @@ pub struct Ip {
 
 #[allow(dead_code)]
 #[repr(packed)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct UDP {
     pub(crate) sport: u16, // souce port
     pub(crate) dport: u16, // destination port
     pub(crate) ulen: u16,  // length, including udp header, not including IP header
     pub(crate) sum: u16,   // checksum
+}
+
+impl Debug for UDP {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("UDP")
+            .field("sport", &self.sport.to_be())
+            .field("dport", &self.dport.to_be())
+            .field("ulen", &self.ulen.to_be())
+            .field("sum", &self.sum.to_be())
+            .finish()
+    }
 }
 
 bitflags! {

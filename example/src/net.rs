@@ -1,41 +1,54 @@
+use alloc::boxed::Box;
 use core::net::{Ipv4Addr, SocketAddrV4};
-use core::ptr::NonNull;
 
 use alloc::sync::Arc;
 use lose_net_stack::connection::NetServer;
 use lose_net_stack::net_trait::{NetInterface, SocketInterface};
-
 use lose_net_stack::MacAddress;
 use opensbi_rt::{print, println};
 use spin::Mutex;
 use virtio_drivers::device::net::VirtIONet;
-use virtio_drivers::transport::mmio::{MmioTransport, VirtIOHeader};
+use virtio_drivers::error::VirtIoError;
 
-use crate::virtio_impls::HalImpl;
+use crate::virtio_impls::{MyHalImpl, SafeIoRegion};
 
-pub struct NetDevice(VirtIONet<HalImpl, MmioTransport>);
+const QUEUE_SIZE: usize = 64;
+const NET_BUFFER_LEN: usize = 2048;
+type MyTransport = virtio_drivers::transport::mmio::MmioTransport;
+type VirtIONetImpl = VirtIONet<MyHalImpl, MyTransport, QUEUE_SIZE>;
+
+
+pub struct NetDevice(VirtIONetImpl);
 
 unsafe impl Sync for NetDevice {}
 unsafe impl Send for NetDevice {}
 
 impl NetDevice {
     pub fn new(ptr: usize) -> Self {
+        let io_region = SafeIoRegion::new(ptr, 0x1000);
+        let transport = MyTransport::new(Box::new(io_region)).expect("failed to create transport");
+
+        let  net = VirtIONetImpl::new(transport, NET_BUFFER_LEN).expect("failed to create net driver");
+
         Self(
-            VirtIONet::<HalImpl, MmioTransport>::new(unsafe {
-                MmioTransport::new(NonNull::new(ptr as *mut VirtIOHeader).unwrap())
-                    .expect("failed to create net driver")
-            })
-            .expect("failed to create net driver"),
+            net
         )
     }
 
     #[allow(dead_code)]
     pub fn recv(&mut self, buf: &mut [u8]) -> usize {
-        self.0.recv(buf).expect("can't receive data")
+        // self.0.receive(buf).expect("can't receive data")
+        let len = loop {
+            let res = self.0.receive(buf);
+            if res != Err(VirtIoError::NotReady){
+                break res.unwrap()
+            }
+        };
+        len
     }
 
     pub fn send(&mut self, buf: &[u8]) {
-        debug!("send data {} bytes", buf.len());
+        error!("send data {} bytes", buf.len());
         hexdump(buf);
         self.0.send(buf).expect("can't receive data")
     }
@@ -80,7 +93,9 @@ pub fn test_udp_local(net_server: &Arc<NetServer<NetMod>>) {
     assert_eq!(
         client.recv_from().expect("cant receive data from server").0,
         b"Hello Client!"
-    )
+    );
+    client.close().unwrap();
+    server.close().unwrap();
 }
 
 pub fn test_tcp_local(net_server: &Arc<NetServer<NetMod>>) {
@@ -109,9 +124,33 @@ pub fn test_tcp_local(net_server: &Arc<NetServer<NetMod>>) {
 
     client.close().unwrap();
 
-    assert!(server_client.is_closed().unwrap() == true);
-    assert!(client.is_closed().unwrap() == true);
+    assert_eq!(server_client.is_closed().unwrap(), true);
+    assert_eq!(client.is_closed().unwrap(), true);
 }
+
+pub fn test_udp(net_server: &Arc<NetServer<NetMod>>) {
+    let server = net_server.blank_udp();
+    server
+        .clone()
+        .bind(SocketAddrV4::new(net_server.get_local_ip(), 2000))
+        .expect("can't bind ip to server");
+
+    let mut buf = [0u8; 2048];
+    loop {
+        let res = NET.lock().as_mut().unwrap().recv(&mut buf);
+        if res > 0 {
+            println!("receive data from net, len is {:?}", res);
+            net_server.analysis_net_data(&mut buf[..res]);
+        }
+        let res = server.recv_from();
+        if let Ok((data, addr)) = res {
+            println!("receive data from {:?}: {:?}", addr, core::str::from_utf8(&data));
+            server.sendto(b"This is udp server!", Some(addr)).expect("can't send to udp server");
+            break
+        }
+    }
+}
+
 
 pub fn init() {
     // let mut net = NetDevice::new(0x1000_8000);
@@ -121,9 +160,11 @@ pub fn init() {
         Ipv4Addr::new(10, 0, 2, 15),
     ));
 
+
     test_udp_local(&net_server);
     test_tcp_local(&net_server);
 
+    test_udp(&net_server);
     info!("net stack example test successed!");
 }
 

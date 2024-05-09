@@ -1,49 +1,41 @@
-use core::{mem::size_of, slice};
-
-pub(crate) struct UnsafeRefIter {
-    ptr: usize,
-    end: usize,
+use core::mem::size_of;
+pub(crate) struct BufIter<'a> {
+    buf: &'a mut [u8],
+    pos: usize,
 }
-
-#[allow(dead_code)]
-impl UnsafeRefIter {
-    pub fn new(data: &[u8]) -> Self {
-        Self {
-            ptr: data.as_ptr() as usize,
-            end: data.as_ptr() as usize + data.len(),
-        }
+impl<'a> BufIter<'a> {
+    pub fn new(buf: &'a mut [u8]) -> Self {
+        Self { buf, pos: 0 }
+    }
+    /// get the ref array the current pointer point to.
+    pub fn get_curr_arr(self) -> &'a [u8] {
+        &self.buf[self.pos..]
+    }
+    /// get the mut ref array the current pointer point to.
+    pub fn get_curr_arr_mut(self) -> &'a mut [u8] {
+        &mut self.buf[self.pos..]
     }
 
     /// get a ref from the current ptr position
-    pub unsafe fn next<T>(&mut self) -> Option<&'static T> {
-        if self.ptr + size_of::<T>() <= self.end {
-            let v = self.ptr as *const T;
-            self.ptr += size_of::<T>();
-            v.as_ref()
+    pub fn next<T>(&mut self) -> Option<&'a T> {
+        if self.pos + size_of::<T>() <= self.buf.len() {
+            let v = &self.buf[self.pos..] as *const [u8] as *const T;
+            self.pos += size_of::<T>();
+            unsafe { v.as_ref() }
         } else {
             None
         }
     }
 
     /// get a mutable ref from the current ptr position
-    pub unsafe fn next_mut<T>(&mut self) -> Option<&'static mut T> {
-        if self.ptr + size_of::<T>() <= self.end {
-            let v = self.ptr as *mut T;
-            self.ptr += size_of::<T>();
-            v.as_mut()
+    pub fn next_mut<T>(&mut self) -> Option<&'a mut T> {
+        if self.pos + size_of::<T>() <= self.buf.len() {
+            let v = &self.buf[self.pos..] as *const [u8] as *mut T;
+            self.pos += size_of::<T>();
+            unsafe { v.as_mut() }
         } else {
             None
         }
-    }
-
-    /// get the ref array the current pointer point to.
-    pub unsafe fn get_curr_arr(&self) -> &'static [u8] {
-        slice::from_raw_parts(self.ptr as _, self.end - self.ptr)
-    }
-
-    /// get the mut ref array the current pointer point to.
-    pub unsafe fn get_curr_arr_mut(&self) -> &'static mut [u8] {
-        slice::from_raw_parts_mut(self.ptr as _, self.end - self.ptr)
     }
 }
 
