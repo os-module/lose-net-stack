@@ -1,4 +1,6 @@
 use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::ToString;
 use core::net::{Ipv4Addr, SocketAddrV4};
 
 use alloc::sync::Arc;
@@ -17,7 +19,6 @@ const NET_BUFFER_LEN: usize = 2048;
 type MyTransport = virtio_drivers::transport::mmio::MmioTransport;
 type VirtIONetImpl = VirtIONet<MyHalImpl, MyTransport, QUEUE_SIZE>;
 
-
 pub struct NetDevice(VirtIONetImpl);
 
 unsafe impl Sync for NetDevice {}
@@ -28,11 +29,10 @@ impl NetDevice {
         let io_region = SafeIoRegion::new(ptr, 0x1000);
         let transport = MyTransport::new(Box::new(io_region)).expect("failed to create transport");
 
-        let  net = VirtIONetImpl::new(transport, NET_BUFFER_LEN).expect("failed to create net driver");
+        let net =
+            VirtIONetImpl::new(transport, NET_BUFFER_LEN).expect("failed to create net driver");
 
-        Self(
-            net
-        )
+        Self(net)
     }
 
     #[allow(dead_code)]
@@ -40,8 +40,8 @@ impl NetDevice {
         // self.0.receive(buf).expect("can't receive data")
         let len = loop {
             let res = self.0.receive(buf);
-            if res != Err(VirtIoError::NotReady){
-                break res.unwrap()
+            if res != Err(VirtIoError::NotReady) {
+                break res.unwrap();
             }
         };
         len
@@ -130,11 +130,14 @@ pub fn test_tcp_local(net_server: &Arc<NetServer<NetMod>>) {
 
 pub fn test_udp(net_server: &Arc<NetServer<NetMod>>) {
     let server = net_server.blank_udp();
+    let local = net_server.get_local_ip();
+    println!("local ip is {:?}", local);
     server
         .clone()
         .bind(SocketAddrV4::new(net_server.get_local_ip(), 2000))
         .expect("can't bind ip to server");
 
+    let mut count = 0;
     let mut buf = [0u8; 2048];
     loop {
         let res = NET.lock().as_mut().unwrap().recv(&mut buf);
@@ -144,13 +147,26 @@ pub fn test_udp(net_server: &Arc<NetServer<NetMod>>) {
         }
         let res = server.recv_from();
         if let Ok((data, addr)) = res {
-            println!("receive data from {:?}: {:?}", addr, core::str::from_utf8(&data));
-            server.sendto(b"This is udp server!", Some(addr)).expect("can't send to udp server");
-            break
+            println!(
+                "receive data from {:?}: {:?}",
+                addr,
+                core::str::from_utf8(&data)
+            );
+            let reply = if count == 5 {
+                "end".to_string()
+            } else {
+                format!("This is udp server!, {}\n", count)
+            };
+            server
+                .sendto(reply.as_bytes(), Some(addr))
+                .expect("can't send to udp server");
+            // loop {
+            //
+            // }
+            count += 1;
         }
     }
 }
-
 
 pub fn init() {
     // let mut net = NetDevice::new(0x1000_8000);
@@ -159,7 +175,6 @@ pub fn init() {
         MacAddress::new([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]),
         Ipv4Addr::new(10, 0, 2, 15),
     ));
-
 
     test_udp_local(&net_server);
     test_tcp_local(&net_server);

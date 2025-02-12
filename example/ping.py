@@ -5,20 +5,20 @@ import time
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 addr = ('localhost', int(sys.argv[1]))
 buf = "this is a ping!".encode('utf-8')
-
 print(addr)
-print("pinging...", file=sys.stderr)
+sock.connect(addr)
+sock.send(buf)
+count = 0
+
 while True:
-	sock.sendto(buf, ("127.0.0.1", int(sys.argv[1])))
 	time.sleep(1)
-	buf, raddr = sock.recvfrom(4096)
-	if buf and buf.decode("utf-8") == "reply":
-		# print(buf.decode("utf-8"), file=sys.stderr)
-		print("receive the reply from qemu.")
-		print("test pass!")
-		break
-	else:
-		data = buf.decode("utf-8")
-		print(data)
-		print("receive the reply from qemu.")
-		break
+	buf = sock.recv(4096)
+	if buf:
+		print("receive the reply from qemu, the content is: {}".format(buf.decode("utf-8")))
+		if buf.decode("utf-8") == "end":
+			print("test pass!")
+			break
+		else:
+			# print("send the ping to qemu {}".format(addr))
+			sock.sendto("this is {}  ping!".format(count).encode('utf-8'), addr)
+			count += 1

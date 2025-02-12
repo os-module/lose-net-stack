@@ -12,9 +12,7 @@ use virtio_drivers::{
 extern "C" {
     fn end();
 }
-static DMA_PADDR: Lazy<AtomicUsize> = Lazy::new(||AtomicUsize::new(end as usize));
-
-
+static DMA_PADDR: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(end as usize));
 
 pub struct MyHalImpl;
 

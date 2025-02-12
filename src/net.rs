@@ -7,14 +7,14 @@ use crate::{
 };
 
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, packed)]
 pub struct Eth {
     pub(crate) dhost: MacAddress, // destination host
     pub(crate) shost: MacAddress, // source host
     pub(crate) rtype: EthRtype,   // packet type, arp or ip
 }
 
-#[repr(packed)]
+#[repr(C, packed)]
 #[derive(Debug, Clone)]
 pub struct Arp {
     pub(crate) httype: u16,      // Hardware type
@@ -29,7 +29,19 @@ pub struct Arp {
 }
 
 #[allow(dead_code)]
-#[repr(packed)]
+#[repr(C, packed)]
+/// See https://github.com/rust-lang/rust-clippy/issues/13375
+///
+/// 在Rust中，#[repr(packed)]默认情况下是#[repr(Rust, packed)]，而不是#[repr(C, packed)]。这意味着：
+/// 1. #[repr(packed)]的作用：
+///     - 它会取消结构体字段之间的所有填充字节（padding），使字段紧密排列。
+///     - 但它不会改变Rust的默认字段排序规则（即repr(Rust)的规则）。
+/// 2. Rust的默认字段排序规则（repr(Rust)）：
+///     - Rust编译器可能会对字段进行重排序以优化内存布局（例如，将大小相近的字段放在一起以减少填充字节）。
+///     - 这种重排序是未指定的（unspecified），因此不能依赖具体的字段顺序。
+/// 3. #[repr(C, packed)]的作用：
+///     - 如果你希望同时满足C语言的内存布局规则（字段顺序与定义顺序一致）并且取消填充字节，可以显式地使用#[repr(C, packed)]。
+///     - 这会强制字段按照定义顺序排列，并且紧密排列
 #[derive(Debug, Clone)]
 pub struct Ip {
     pub(crate) vhl: u8,         // version << 4 | header length >> 2
@@ -45,7 +57,7 @@ pub struct Ip {
 }
 
 #[allow(dead_code)]
-#[repr(packed)]
+#[repr(C, packed)]
 #[derive(Clone, Copy)]
 pub struct UDP {
     pub(crate) sport: u16, // souce port
@@ -79,7 +91,7 @@ bitflags! {
 }
 
 #[allow(dead_code)]
-#[repr(packed)]
+#[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct TCP {
     pub(crate) sport: u16,      // souce port
@@ -94,7 +106,7 @@ pub struct TCP {
 }
 
 #[allow(dead_code)]
-#[repr(packed)]
+#[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct ICMP {
     pub(crate) type_: u8,

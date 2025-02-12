@@ -1,4 +1,5 @@
 #![no_std]
+#![forbid(unsafe_code)]
 mod addr;
 pub mod arp_table;
 pub mod connection;
@@ -7,7 +8,8 @@ mod net;
 pub mod net_trait;
 pub mod packets;
 pub mod results;
-pub(crate) mod utils;
+
+pub(crate) use low_level_op as utils;
 
 #[macro_use]
 extern crate alloc;

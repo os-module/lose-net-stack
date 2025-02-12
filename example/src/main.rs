@@ -2,7 +2,6 @@
 #![no_std]
 #![no_main]
 #![feature(naked_functions)]
-#![feature(asm_const)]
 
 use log::LevelFilter;
 

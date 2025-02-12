@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 virtio-drivers = { git = "https://github.com/os-module/safe-virtio-drivers.git" }
-opensbi-rt = { git = "https://github.com/rcore-os/riscv-sbi-rt", branch = "old"}
+opensbi-rt = { git = "https://github.com/rcore-os/riscv-sbi-rt", branch = "old" }
 spin = "0"
 log = "0.4"
-lose-net-stack = { path = "../", features = ["log"]}
+lose-net-stack = { path = "../", features = ["log"] }

@@ -125,10 +125,11 @@ impl<T: NetInterface + 'static> NetServer<T> {
         let udp_header = data_ptr_iter.next::<UDP>().unwrap();
         let data = data_ptr_iter.get_curr_arr();
         debug!(
-            "receive a udp packet: {:?} from {:?}:{}",
+            "receive a udp packet: {:?} from {:?}:{} to port {}",
             data,
             ip_header.src,
-            udp_header.sport.to_be()
+            udp_header.sport.to_be(),
+            udp_header.dport.to_be()
         );
 
         let local_port = udp_header.dport.to_be();
@@ -183,6 +184,7 @@ impl<T: NetInterface + 'static> NetServer<T> {
 
     fn analysis_ip<'a>(&self, mut data_ptr_iter: BufIter<'a>, eth_header: &Eth) {
         let ip_header = data_ptr_iter.next::<Ip>().unwrap();
+        debug!("receive a ip packet {:?}", ip_header);
 
         // judge whether the ip header is self
         if ip_header.vhl != IP_HEADER_VHL || ip_header.dst != self.local_ip {

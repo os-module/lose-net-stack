@@ -1,5 +1,5 @@
 use core::mem::size_of;
-pub(crate) struct BufIter<'a> {
+pub struct BufIter<'a> {
     buf: &'a mut [u8],
     pos: usize,
 }
